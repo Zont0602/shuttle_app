@@ -14,3 +14,4 @@ try:
 
 except requests.exceptions.RequestException:
     print("API 請求失敗")
+print("Git practice")
