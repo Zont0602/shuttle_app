@@ -17,3 +17,4 @@ except requests.exceptions.RequestException:
 print("Git practice")
 
 print("Testing master branch")
+print("Testing conflict branch")
