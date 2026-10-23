@@ -16,4 +16,4 @@ except requests.exceptions.RequestException:
     print("API 請求失敗")
 print("Git practice")
 
-print("Testing feature branch")
+print("Testing conflict branch")
