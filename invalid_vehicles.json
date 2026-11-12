@@ -1,0 +1,6 @@
+{
+    "vehicles": [
+        {"id": 10, "passengers": 0, "capacity": 2},
+        {"id": 20, "passengers": 1, "capacity": 2}
+    ]
+}

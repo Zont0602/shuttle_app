@@ -1,6 +1,6 @@
 vehicle:
   capacity: 4
-  max_delay_minutes: 10
+  max_extra_minutes: 8
 
 reservation:
   enabled: true
