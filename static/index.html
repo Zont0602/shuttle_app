@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <title>動態共乘 Demo</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+  <style>
+    html, body { height: 100%; margin: 0; }
+    #map { height: 100%; }
+  </style>
+</head>
+<body>
+  <div id="map"></div>
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script>
+    // 後端用 {lat, lng},Leaflet 要 [緯度, 經度],所以在這裡轉換
+    const toLatLng = (p) => [p.lat, p.lng];
+
+    async function main() {
+      const response = await fetch("/api/state");
+      if (!response.ok) {
+        document.body.textContent = "載入失敗,狀態碼 " + response.status;
+        return;
+      }
+      const state = await response.json();
+
+      const map = L.map("map");
+      L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
+        maxZoom: 19,
+        attribution: "&copy; OpenStreetMap contributors",
+      }).addTo(map);
+
+      const stopsById = {};
+      state.stops.forEach((stop) => { stopsById[stop.id] = stop; });
+      const pickup = stopsById[state.order.pickup_stop];
+      const dropoff = stopsById[state.order.dropoff_stop];
+      const vehiclePos = toLatLng(state.vehicle.current_location);
+
+      L.marker(vehiclePos).addTo(map).bindPopup("車輛 " + state.vehicle.id);
+      L.marker(toLatLng(pickup.location)).addTo(map).bindPopup("上車點:" + pickup.name);
+      L.marker(toLatLng(dropoff.location)).addTo(map).bindPopup("下車點:" + dropoff.name);
+
+      const toPickup = state.routes.vehicle_to_pickup.path.map(toLatLng);
+      const toDropoff = state.routes.pickup_to_dropoff.path.map(toLatLng);
+      L.polyline(toPickup, { dashArray: "6 8" }).addTo(map);
+      L.polyline(toDropoff).addTo(map);
+
+      map.fitBounds(L.latLngBounds(toPickup.concat(toDropoff)));
+    }
+
+    main();
+  </script>
+</body>
+</html>
