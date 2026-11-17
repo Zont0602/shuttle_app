@@ -27,6 +27,10 @@ _lock = threading.Lock()
 # 目前的模擬狀態;第一次被讀取時才建立。
 _state = None
 
+# 模擬速度倍率的允許範圍:1 = 正常速度,2 = 兩倍快,0.5 = 一半慢。
+MIN_SPEED = 0.1
+MAX_SPEED = 20
+
 
 def load_route_legs():
     with open(ROUTES_FILE, "r", encoding="utf-8") as file:
@@ -34,7 +38,7 @@ def load_route_legs():
     return [data["legs"][name] for name in LEG_ORDER]
 
 
-def create_initial_state(now_s):
+def create_initial_state(now_s, speed=1.0):
     """建立一份全新的模擬狀態。now_s 是現實時間(秒),用來計算之後經過了多久。"""
     scenario = get_scenario()
     vehicle = scenario["vehicle"]
@@ -48,6 +52,7 @@ def create_initial_state(now_s):
     state = {
         "sim_time_s": 0.0,            # 模擬時鐘:模擬世界過了幾秒
         "last_real_time_s": now_s,    # 上次推進時鐘時的現實時間
+        "speed": speed,               # 模擬速度倍率:現實 1 秒 = 模擬幾秒
         "vehicle": vehicle,
         "order": order,
         "stops": scenario["stops"],
@@ -58,12 +63,12 @@ def create_initial_state(now_s):
 
 
 def advance_clock(state, now_s):
-    """把模擬時鐘往前推:現實過了幾秒,模擬就過幾秒。
+    """把模擬時鐘往前推:模擬前進的秒數 = 現實經過的秒數 × 速度倍率。
 
-    之後要做暫停 / 加速,只要改這裡:暫停時不加,加速時乘上倍率。
+    last_real_time_s 記的是現實時間,不乘倍率。
     """
     real_elapsed_s = now_s - state["last_real_time_s"]
-    state["sim_time_s"] += real_elapsed_s
+    state["sim_time_s"] += real_elapsed_s * state["speed"]
     state["last_real_time_s"] = now_s
 
 
@@ -74,23 +79,40 @@ def update_vehicle_location(state):
     )
 
 
+def _bring_state_up_to_now(now_s):
+    """確保狀態存在,並把時鐘和車輛位置更新到現在。呼叫前必須已經拿到鎖。"""
+    global _state
+    if _state is None:
+        _state = create_initial_state(now_s)
+    advance_clock(_state, now_s)
+    update_vehicle_location(_state)
+
+
 def get_current_state():
     """推進時鐘、更新位置,回傳目前狀態的「複本」。"""
-    global _state
     with _lock:
-        now_s = time.monotonic()
-        if _state is None:
-            _state = create_initial_state(now_s)
-        advance_clock(_state, now_s)
-        update_vehicle_location(_state)
+        _bring_state_up_to_now(time.monotonic())
         # 回傳複本:FastAPI 把它轉成 JSON 的同時,別的請求可能正在改 _state,
         # 給複本就不會讀到改到一半的資料。
         return copy.deepcopy(_state)
 
 
+def set_speed(speed):
+    """改變模擬速度倍率。"""
+    if not (MIN_SPEED <= speed <= MAX_SPEED):
+        raise ValueError(f"速度倍率必須介於 {MIN_SPEED} 和 {MAX_SPEED} 之間")
+    with _lock:
+        # 先用「舊的倍率」把時鐘推進到現在,再換新倍率。
+        # 不先推進的話,上次輪詢到現在這段時間會被誤用新倍率重算。
+        _bring_state_up_to_now(time.monotonic())
+        _state["speed"] = speed
+        return copy.deepcopy(_state)
+
+
 def reset():
-    """丟掉目前的模擬,從頭開始。"""
+    """丟掉目前的模擬,從頭開始。速度倍率保留,不用每次重設後再調一次。"""
     global _state
     with _lock:
-        _state = create_initial_state(time.monotonic())
+        speed = _state["speed"] if _state is not None else 1.0
+        _state = create_initial_state(time.monotonic(), speed)
         return copy.deepcopy(_state)

@@ -3,6 +3,7 @@ from pathlib import Path
 from fastapi import FastAPI
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel, Field
 
 import sim_state
 
@@ -23,6 +24,18 @@ def get_state():
 def reset_state():
     # 重設模擬:時鐘歸零、車回到起點
     return sim_state.reset()
+
+
+class SpeedRequest(BaseModel):
+    # 請求內容的格式:{"speed": 2}
+    # FastAPI 會自動檢查:缺欄位、不是數字、超出範圍,都會回傳 422 和錯誤說明
+    speed: float = Field(ge=sim_state.MIN_SPEED, le=sim_state.MAX_SPEED)
+
+
+@app.post("/api/speed")
+def set_speed(request: SpeedRequest):
+    # 改變模擬速度倍率(快轉 / 放慢)
+    return sim_state.set_speed(request.speed)
 
 
 @app.get("/")

@@ -7,7 +7,7 @@
 import json
 
 import sim_state
-from simulation import position_on_leg
+from simulation import position_on_leg, position_on_route
 
 with open("routes.json", "r", encoding="utf-8") as file:
     LEGS = json.load(file)["legs"]
@@ -36,6 +36,34 @@ assert_close(position_on_leg(LEG, 75.5), 25.032651, 121.57247)
 
 # 140 秒:在第 39 小段的 41% 處
 assert_close(position_on_leg(LEG, 140), 25.037755, 121.575383)
+
+
+# ---------- position_on_route ----------
+
+LEG_0 = LEGS["vehicle_to_pickup"]   # 第 0 段:車輛起點 → 上車點(151 秒)
+LEG_1 = LEGS["pickup_to_dropoff"]   # 第 1 段:上車點 → 下車點(151.2 秒)
+ROUTE = [LEG_0, LEG_1]
+
+# 0 秒:還沒出發,在第 0 段起點
+assert position_on_route(ROUTE, 0) == LEG_0["path"][0]
+
+# 100 秒:還在第 0 段,秒數不用換算
+assert position_on_route(ROUTE, 100) == position_on_leg(LEG_0, 100)
+
+# 151 秒:剛好走完第 0 段,在上車點(第 0 段終點)
+assert position_on_route(ROUTE, 151) == LEG_0["path"][-1]
+
+# 160 秒:進入第 1 段,要換算成這段的第 160 - 151 = 9 秒
+# (秒數經過加減換算,可能有極小誤差,所以用 assert_close)
+expected = position_on_leg(LEG_1, 9)
+assert_close(position_on_route(ROUTE, 160), expected["lat"], expected["lng"])
+
+# 250 秒:第 1 段的第 250 - 151 = 99 秒
+expected = position_on_leg(LEG_1, 99)
+assert_close(position_on_route(ROUTE, 250), expected["lat"], expected["lng"])
+
+# 超過全部路段的總時間:停在最後一段終點(下車點)
+assert position_on_route(ROUTE, 999) == LEG_1["path"][-1]
 
 
 # ---------- sim_state:模擬時鐘 ----------
@@ -68,5 +96,43 @@ assert other["order"]["status"] == "assigned"
 
 # 乘客數要等到上車才增加,派車時不變
 assert other["vehicle"]["passengers"] == 0
+
+
+# ---------- sim_state:速度倍率 ----------
+
+# 預設 1 倍速:現實過 10 秒,模擬前進 10 秒
+state = sim_state.create_initial_state(now_s=0.0)
+assert state["speed"] == 1.0
+sim_state.advance_clock(state, now_s=10.0)
+assert state["sim_time_s"] == 10.0
+
+# 5 倍速:現實過 2 秒,模擬前進 10 秒
+state = sim_state.create_initial_state(now_s=0.0, speed=5)
+sim_state.advance_clock(state, now_s=2.0)
+assert state["sim_time_s"] == 10.0
+
+# 0.5 倍速:現實過 4 秒,模擬前進 2 秒
+state = sim_state.create_initial_state(now_s=0.0, speed=0.5)
+sim_state.advance_clock(state, now_s=4.0)
+assert state["sim_time_s"] == 2.0
+
+# 中途換倍率:1 倍速走 3 秒,先推進時鐘再換成 10 倍速,再走 1 秒,總共 3 + 10 = 13 秒
+# (set_speed 就是這個順序:先用舊倍率推進到現在,才換新倍率)
+state = sim_state.create_initial_state(now_s=0.0)
+sim_state.advance_clock(state, now_s=3.0)
+state["speed"] = 10
+sim_state.advance_clock(state, now_s=4.0)
+assert state["sim_time_s"] == 13.0
+
+# 現實時間的紀錄不乘倍率
+assert state["last_real_time_s"] == 4.0
+
+# 超出允許範圍的倍率會被拒絕
+for bad_speed in (0, -1, 100):
+    try:
+        sim_state.set_speed(bad_speed)
+        assert False, f"倍率 {bad_speed} 應該被拒絕"
+    except ValueError:
+        pass
 
 print("全部通過")
