@@ -7,24 +7,40 @@
   <style>
     html, body { height: 100%; margin: 0; }
     #map { height: 100%; }
+    #panel {
+      position: absolute; top: 10px; right: 10px; z-index: 1000;
+      background: white; padding: 8px 12px; border-radius: 6px;
+      font: 14px sans-serif; box-shadow: 0 1px 4px rgba(0, 0, 0, 0.3);
+    }
   </style>
 </head>
 <body>
   <div id="map"></div>
+  <div id="panel">
+    <div id="status">載入中…</div>
+    <button id="reset">重設模擬</button>
+  </div>
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <script>
     // 後端用 {lat, lng},Leaflet 要 [緯度, 經度],所以在這裡轉換
     const toLatLng = (p) => [p.lat, p.lng];
+    const statusEl = document.getElementById("status");
+    const POLL_MS = 1000;  // 每 1 秒向後端要一次狀態
 
-    async function main() {
-      const response = await fetch("/api/state");
+    let map = null;
+    let vehicleMarker = null;
+
+    async function fetchState(method, url) {
+      const response = await fetch(url, { method: method });
       if (!response.ok) {
-        document.body.textContent = "載入失敗,狀態碼 " + response.status;
-        return;
+        throw new Error("狀態碼 " + response.status);
       }
-      const state = await response.json();
+      return response.json();
+    }
 
-      const map = L.map("map");
+    // 第一次拿到狀態時:建立地圖、站點、路線(這些不會動,只畫一次)
+    function drawStatic(state) {
+      map = L.map("map");
       L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
         maxZoom: 19,
         attribution: "&copy; OpenStreetMap contributors",
@@ -34,21 +50,56 @@
       state.stops.forEach((stop) => { stopsById[stop.id] = stop; });
       const pickup = stopsById[state.order.pickup_stop];
       const dropoff = stopsById[state.order.dropoff_stop];
-      const vehiclePos = toLatLng(state.vehicle.current_location);
-
-      L.marker(vehiclePos).addTo(map).bindPopup("車輛 " + state.vehicle.id);
       L.marker(toLatLng(pickup.location)).addTo(map).bindPopup("上車點:" + pickup.name);
       L.marker(toLatLng(dropoff.location)).addTo(map).bindPopup("下車點:" + dropoff.name);
 
-      const toPickup = state.routes.vehicle_to_pickup.path.map(toLatLng);
-      const toDropoff = state.routes.pickup_to_dropoff.path.map(toLatLng);
-      L.polyline(toPickup, { dashArray: "6 8" }).addTo(map);
-      L.polyline(toDropoff).addTo(map);
+      // 依行駛順序畫每一段路線:第一段(去接人)用虛線,之後用實線
+      let allPoints = [];
+      state.route_legs.forEach((leg, index) => {
+        const points = leg.path.map(toLatLng);
+        L.polyline(points, index === 0 ? { dashArray: "6 8" } : {}).addTo(map);
+        allPoints = allPoints.concat(points);
+      });
+      map.fitBounds(L.latLngBounds(allPoints));
 
-      map.fitBounds(L.latLngBounds(toPickup.concat(toDropoff)));
+      vehicleMarker = L.circleMarker(toLatLng(state.vehicle.current_location), {
+        radius: 9, color: "#c0392b", fillOpacity: 0.9,
+      }).addTo(map).bindPopup("車輛 " + state.vehicle.id);
     }
 
-    main();
+    // 每次拿到狀態時:只移動車輛、更新文字
+    function drawDynamic(state) {
+      vehicleMarker.setLatLng(toLatLng(state.vehicle.current_location));
+      statusEl.textContent =
+        "模擬時間 " + state.sim_time_s.toFixed(0) + " 秒|訂單 " + state.order.status;
+    }
+
+    function render(state) {
+      if (map === null) {
+        drawStatic(state);
+      }
+      drawDynamic(state);
+    }
+
+    // 輪詢:上一次請求結束後才排下一次,避免請求疊在一起
+    async function poll() {
+      try {
+        render(await fetchState("GET", "/api/state"));
+      } catch (error) {
+        statusEl.textContent = "無法取得狀態(" + error.message + "),稍後重試";
+      }
+      setTimeout(poll, POLL_MS);
+    }
+
+    document.getElementById("reset").addEventListener("click", async () => {
+      try {
+        render(await fetchState("POST", "/api/reset"));
+      } catch (error) {
+        statusEl.textContent = "重設失敗(" + error.message + ")";
+      }
+    });
+
+    poll();
   </script>
 </body>
 </html>

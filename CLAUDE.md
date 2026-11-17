@@ -71,5 +71,7 @@
 
 ## 已知待處理
 - 舊邏輯(main.py)的簡化:assign_order 選車後立刻增加 passengers;extra_minutes 是手填值;無時間資料時退回「第一台可承接」,新模式不得這樣做;容量判斷未考慮沿途下車。
-- app.py 的 `build_state()` 目前呼叫舊的 assign_order(commit a31d604),派車就把 passengers +1,且走「第一台可承接」退路,違反上述規則;階段 2 重整狀態時處理。
+- 模擬狀態在 sim_state.py(記憶體、模擬時鐘、重設);目前「訂單一開始就已派車」是暫時的場景前提,派車觸發留待後續任務。
+- simulation.py 的 `position_on_route` 是 Claude 放的暫時版本(只走第一段),由 Zont 改寫成走完所有 leg。
+- 判斷到站要用時間(已行駛秒數 ≥ duration_s),不可比座標:OSRM 會把點吸附到道路,站點與路線端點差 1~3 公尺。
 - 測試以數字命名且集中在 test_assign_order.py,階段 6 前逐步遷移成有名稱的 pytest 測試。

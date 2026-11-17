@@ -1,48 +1,28 @@
-import json
-from functools import lru_cache
 from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from main import assign_order
-from scenario import get_scenario
+import sim_state
 
 BASE_DIR = Path(__file__).resolve().parent
 STATIC_DIR = BASE_DIR / "static"
-ROUTES_FILE = BASE_DIR / "routes.json"
 
 app = FastAPI()
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 
-@lru_cache(maxsize=1)
-def load_routes():
-    with open(ROUTES_FILE, "r", encoding="utf-8") as file:
-        data = json.load(file)
-    return data
-
-
-def build_state():
-    state = get_scenario()
-    vehicle = state["vehicle"]
-    order = state["order"]
-
-    assigned_id = assign_order([vehicle], order["passengers"])
-    if assigned_id is None:
-        order["status"] = "unassigned"
-        return state
-
-    order["status"] = "assigned"
-    order["assigned_vehicle"] = assigned_id
-    state["routes"] = load_routes()["legs"]
-    return state
-
-
 @app.get("/api/state")
 def get_state():
-    return build_state()
+    # 讀取目前的模擬狀態(會先把模擬時鐘推進到現在)
+    return sim_state.get_current_state()
+
+
+@app.post("/api/reset")
+def reset_state():
+    # 重設模擬:時鐘歸零、車回到起點
+    return sim_state.reset()
 
 
 @app.get("/")
