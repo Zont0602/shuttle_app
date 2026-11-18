@@ -38,6 +38,18 @@ def set_speed(request: SpeedRequest):
     return sim_state.set_speed(request.speed)
 
 
+@app.post("/api/pause")
+def pause():
+    # 暫停模擬:模擬時鐘停止前進,車子停在原地
+    return sim_state.set_paused(True)
+
+
+@app.post("/api/resume")
+def resume():
+    # 繼續模擬:從暫停的時間點接著跑
+    return sim_state.set_paused(False)
+
+
 @app.get("/")
 def index():
     return FileResponse(STATIC_DIR / "index.html")

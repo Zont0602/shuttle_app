@@ -63,6 +63,7 @@ def create_initial_state(now_s, speed=1.0):
         "sim_time_s": 0.0,            # 模擬時鐘:模擬世界過了幾秒
         "last_real_time_s": now_s,    # 上次推進時鐘時的現實時間
         "speed": speed,               # 模擬速度倍率:現實 1 秒 = 模擬幾秒
+        "paused": False,              # 是否暫停:暫停時模擬時鐘不前進
         "vehicle": vehicle,
         "order": order,
         "stops": scenario["stops"],
@@ -76,10 +77,12 @@ def create_initial_state(now_s, speed=1.0):
 def advance_clock(state, now_s):
     """把模擬時鐘往前推:模擬前進的秒數 = 現實經過的秒數 × 速度倍率。
 
-    last_real_time_s 記的是現實時間,不乘倍率。
+    暫停時不加模擬時間,但 last_real_time_s 照常更新,
+    這樣繼續之後不會把暫停期間的時間一次補回來。
     """
     real_elapsed_s = now_s - state["last_real_time_s"]
-    state["sim_time_s"] += real_elapsed_s * state["speed"]
+    if not state["paused"] :
+        state["sim_time_s"] += real_elapsed_s * state["speed"]
     state["last_real_time_s"] = now_s
 
 
@@ -121,8 +124,19 @@ def set_speed(speed):
         return copy.deepcopy(_state)
 
 
+def set_paused(paused):
+    """暫停(paused=True)或繼續(paused=False)模擬。重複暫停或重複繼續都不會出錯。"""
+    with _lock:
+        # 和 set_speed 一樣:先把時鐘推進到現在,再切換。
+        # 暫停時:按下暫停前跑的那一小段時間要算進去。
+        # 繼續時:暫停期間的時間在這裡被「跳過」,不會在繼續後一次補回來。
+        _bring_state_up_to_now(time.monotonic())
+        _state["paused"] = paused
+        return copy.deepcopy(_state)
+
+
 def reset():
-    """丟掉目前的模擬,從頭開始。速度倍率保留,不用每次重設後再調一次。"""
+    """丟掉目前的模擬,從頭開始。速度倍率保留;暫停會解除,重設後直接開始跑。"""
     global _state
     with _lock:
         speed = _state["speed"] if _state is not None else 1.0

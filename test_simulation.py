@@ -127,6 +127,41 @@ assert state["sim_time_s"] == 13.0
 # 現實時間的紀錄不乘倍率
 assert state["last_real_time_s"] == 4.0
 
+# ---------- sim_state:暫停 ----------
+
+# 新建立的模擬預設不是暫停
+state = sim_state.create_initial_state(now_s=1000.0)
+assert state["paused"] is False
+
+# 暫停中,現實過了 10 秒(期間每秒輪詢一次),模擬時間不變
+state["sim_time_s"] = 50.0
+state["paused"] = True
+for now_s in range(1001, 1011):
+    sim_state.advance_clock(state, now_s=float(now_s))
+assert state["sim_time_s"] == 50.0
+
+# 暫停中,現實時間的紀錄仍然持續更新
+assert state["last_real_time_s"] == 1010.0
+
+# 繼續後再過 1 秒,模擬只前進 1 秒(不會把暫停的 10 秒一次補回來)
+state["paused"] = False
+sim_state.advance_clock(state, now_s=1011.0)
+assert state["sim_time_s"] == 51.0
+
+# 暫停中,車子位置和訂單狀態都不變(停在上車點前,不會偷偷上車)
+state = sim_state.create_initial_state(now_s=0.0)
+sim_state.advance_clock(state, now_s=140.0)
+sim_state.update_vehicle_location(state)
+location_before = state["vehicle"]["current_location"]
+state["paused"] = True
+sim_state.advance_clock(state, now_s=500.0)
+sim_state.update_vehicle_location(state)
+process_arrivals(state)
+assert state["vehicle"]["current_location"] == location_before
+assert state["order"]["status"] == "assigned"
+assert state["vehicle"]["passengers"] == 0
+
+
 # ---------- process_arrivals:到站上下車 ----------
 
 

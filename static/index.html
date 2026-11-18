@@ -28,6 +28,7 @@
       <button data-speed="5">5×</button>
       <button data-speed="10">10×</button>
     </div>
+    <button id="pause">暫停</button>
     <button id="reset">重設模擬</button>
   </div>
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
@@ -39,6 +40,7 @@
 
     let map = null;
     let vehicleMarker = null;
+    let isPaused = false;  // 後端回傳的暫停狀態,決定暫停按鈕要送暫停還是繼續
 
     async function fetchState(method, url, body) {
       const options = { method: method };
@@ -86,7 +88,10 @@
     function drawDynamic(state) {
       vehicleMarker.setLatLng(toLatLng(state.vehicle.current_location));
       statusEl.textContent =
-        "模擬時間 " + state.sim_time_s.toFixed(0) + " 秒|訂單 " + state.order.status;
+        "模擬時間 " + state.sim_time_s.toFixed(0) + " 秒|訂單 " + state.order.status +
+        (state.paused ? "(已暫停)" : "");
+      isPaused = state.paused;
+      document.getElementById("pause").textContent = isPaused ? "繼續" : "暫停";
       // 標示目前使用中的速度按鈕
       document.querySelectorAll("#speeds button").forEach((button) => {
         button.classList.toggle("active", Number(button.dataset.speed) === state.speed);
@@ -127,6 +132,15 @@
           statusEl.textContent = "調整速度失敗(" + error.message + ")";
         }
       });
+    });
+
+    document.getElementById("pause").addEventListener("click", async () => {
+      try {
+        const url = isPaused ? "/api/resume" : "/api/pause";
+        render(await fetchState("POST", url));
+      } catch (error) {
+        statusEl.textContent = "暫停 / 繼續失敗(" + error.message + ")";
+      }
     });
 
     poll();
