@@ -10,7 +10,7 @@ import time
 from pathlib import Path
 
 from scenario import get_scenario
-from simulation import position_on_route
+from simulation import position_on_route, process_arrivals
 
 BASE_DIR = Path(__file__).resolve().parent
 ROUTES_FILE = BASE_DIR / "routes.json"
@@ -45,9 +45,19 @@ def create_initial_state(now_s, speed=1.0):
     order = scenario["order"]
 
     # 場景前提(暫時):訂單一開始就已派給這台車。
-    # 乘客數不變,要等車到上車點才增加(之後的任務處理)。
+    # 乘客數不變,要等車到上車點才增加(由 process_arrivals 處理)。
     order["status"] = "assigned"
     order["assigned_vehicle"] = vehicle["id"]
+
+    # 到站事件:依發生順序排列。
+    # leg_index 表示「開完第幾段 leg 時」發生這個事件(從 0 開始)。
+    # done 表示這個事件是否已經執行過;執行過的事件不能再執行一次。
+    stop_events = [
+        {"type": "pickup", "order_id": order["id"], "stop_id": order["pickup_stop"],
+         "leg_index": 0, "done": False},
+        {"type": "dropoff", "order_id": order["id"], "stop_id": order["dropoff_stop"],
+         "leg_index": 1, "done": False},
+    ]
 
     state = {
         "sim_time_s": 0.0,            # 模擬時鐘:模擬世界過了幾秒
@@ -57,6 +67,7 @@ def create_initial_state(now_s, speed=1.0):
         "order": order,
         "stops": scenario["stops"],
         "route_legs": load_route_legs(),  # 這台車依序要開的每一段路
+        "stop_events": stop_events,       # 這台車依序要執行的上下車事件
     }
     update_vehicle_location(state)
     return state
@@ -86,6 +97,7 @@ def _bring_state_up_to_now(now_s):
         _state = create_initial_state(now_s)
     advance_clock(_state, now_s)
     update_vehicle_location(_state)
+    process_arrivals(_state)
 
 
 def get_current_state():

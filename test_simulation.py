@@ -7,7 +7,7 @@
 import json
 
 import sim_state
-from simulation import position_on_leg, position_on_route
+from simulation import position_on_leg, position_on_route, process_arrivals
 
 with open("routes.json", "r", encoding="utf-8") as file:
     LEGS = json.load(file)["legs"]
@@ -126,6 +126,59 @@ assert state["sim_time_s"] == 13.0
 
 # 現實時間的紀錄不乘倍率
 assert state["last_real_time_s"] == 4.0
+
+# ---------- process_arrivals:到站上下車 ----------
+
+
+def state_at(sim_time_s, state=None):
+    # 把模擬時間設成 sim_time_s 後處理到站事件;沒給 state 就建立新的
+    if state is None:
+        state = sim_state.create_initial_state(now_s=0.0)
+    state["sim_time_s"] = sim_time_s
+    process_arrivals(state)
+    return state
+
+
+# 100 秒:還沒到上車點,訂單仍是 assigned,車上沒人
+state = state_at(100)
+assert state["order"]["status"] == "assigned"
+assert state["vehicle"]["passengers"] == 0
+
+# 151 秒:剛好開完第 0 段,到上車點 → 乘客上車
+state = state_at(151, state)
+assert state["order"]["status"] == "onboard"
+assert state["vehicle"]["passengers"] == 1
+
+# 冪等:同一時間點重複處理 3 次(像重複輪詢),乘客數不會變成 2、3
+for _ in range(3):
+    state = state_at(151, state)
+assert state["vehicle"]["passengers"] == 1
+
+# 200 秒:在去下車點的路上,乘客還在車上(下車事件不可提早執行)
+state = state_at(200, state)
+assert state["order"]["status"] == "onboard"
+assert state["vehicle"]["passengers"] == 1
+assert [event["done"] for event in state["stop_events"]] == [True, False]
+
+# 302.2 秒:開完第 1 段,到下車點 → 乘客下車,訂單完成
+state = state_at(302.2, state)
+assert state["order"]["status"] == "completed"
+assert state["vehicle"]["passengers"] == 0
+
+# 完成後再處理,不會變成負數
+state = state_at(400, state)
+assert state["vehicle"]["passengers"] == 0
+
+# 時間一次跳過兩個站(例如 10 倍速 + 每秒輪詢):上下車依序都要執行
+state = state_at(100)
+state = state_at(400, state)
+assert state["order"]["status"] == "completed"
+assert state["vehicle"]["passengers"] == 0
+assert [event["done"] for event in state["stop_events"]] == [True, True]
+
+# 派車的車輛不會因為上下車而改變
+assert state["order"]["assigned_vehicle"] == state["vehicle"]["id"]
+
 
 # 超出允許範圍的倍率會被拒絕
 for bad_speed in (0, -1, 100):

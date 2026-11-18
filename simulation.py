@@ -30,3 +30,23 @@ def position_on_route(route_legs, elapsed_s):
             s_on_leg = leg["duration_s"] - (total_s - elapsed_s) 
             return position_on_leg(leg , s_on_leg)
     return position_on_leg(route_legs[-1], elapsed_s)
+
+
+def process_arrivals(state):
+    stop_events = state["stop_events"]
+    for stop_event in stop_events:
+        leg_index = stop_event["leg_index"]
+        if not stop_event["done"]:
+            arrival_s = 0 
+            for i in range(leg_index + 1) :
+                arrival_s += state["route_legs"][i]["duration_s"]
+            if state["sim_time_s"] >= arrival_s:
+                if stop_event["type"] == "pickup":
+                    state["vehicle"]["passengers"] += state["order"]["passengers"]
+                    state["order"]["status"] = "onboard"
+                elif stop_event["type"] == "dropoff":
+                    state["vehicle"]["passengers"] -= state["order"]["passengers"]
+                    state["order"]["status"] = "completed"
+                stop_event["done"] = True
+                    
+
