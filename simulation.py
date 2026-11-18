@@ -33,14 +33,16 @@ def position_on_route(route_legs, elapsed_s):
 
 
 def process_arrivals(state):
-    stop_events = state["stop_events"]
+    # 路線和事件已經搬到車輛身上(派車後才屬於該車)
+    stop_events = state["vehicle"]["stop_events"]
     for stop_event in stop_events:
         leg_index = stop_event["leg_index"]
         if not stop_event["done"]:
             arrival_s = 0 
+            driven_s = state["sim_time_s"] - state["vehicle"]["route_start_s"]
             for i in range(leg_index + 1) :
-                arrival_s += state["route_legs"][i]["duration_s"]
-            if state["sim_time_s"] >= arrival_s:
+                arrival_s += state["vehicle"]["route_legs"][i]["duration_s"]
+            if driven_s >= arrival_s:
                 if stop_event["type"] == "pickup":
                     state["vehicle"]["passengers"] += state["order"]["passengers"]
                     state["order"]["status"] = "onboard"

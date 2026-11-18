@@ -4,20 +4,12 @@
 這個檔案只負責「保存狀態、推進時鐘、重設」;怎麼算位置交給 simulation.py。
 """
 import copy
-import json
 import threading
 import time
-from pathlib import Path
 
+from dispatch import dispatch_orders
 from scenario import get_scenario
 from simulation import position_on_route, process_arrivals
-
-BASE_DIR = Path(__file__).resolve().parent
-ROUTES_FILE = BASE_DIR / "routes.json"
-
-# routes.json 目前用名稱存每段路線;這裡依「行駛順序」轉成 list。
-# 之後的程式只看 list 的順序,不看名稱,路線變三段、四段也不用改。
-LEG_ORDER = ["vehicle_to_pickup", "pickup_to_dropoff"]
 
 # 鎖:同一時間只讓一個請求讀寫狀態。
 # FastAPI 可能同時處理好幾個請求(例如開了兩個分頁在輪詢),
@@ -32,32 +24,16 @@ MIN_SPEED = 0.1
 MAX_SPEED = 20
 
 
-def load_route_legs():
-    with open(ROUTES_FILE, "r", encoding="utf-8") as file:
-        data = json.load(file)
-    return [data["legs"][name] for name in LEG_ORDER]
-
-
 def create_initial_state(now_s, speed=1.0):
     """建立一份全新的模擬狀態。now_s 是現實時間(秒),用來計算之後經過了多久。"""
     scenario = get_scenario()
     vehicle = scenario["vehicle"]
-    order = scenario["order"]
+    order = scenario["order"]   # 一開始是 requested,要等 dispatch_orders 派車
 
-    # 場景前提(暫時):訂單一開始就已派給這台車。
-    # 乘客數不變,要等車到上車點才增加(由 process_arrivals 處理)。
-    order["status"] = "assigned"
-    order["assigned_vehicle"] = vehicle["id"]
-
-    # 到站事件:依發生順序排列。
-    # leg_index 表示「開完第幾段 leg 時」發生這個事件(從 0 開始)。
-    # done 表示這個事件是否已經執行過;執行過的事件不能再執行一次。
-    stop_events = [
-        {"type": "pickup", "order_id": order["id"], "stop_id": order["pickup_stop"],
-         "leg_index": 0, "done": False},
-        {"type": "dropoff", "order_id": order["id"], "stop_id": order["dropoff_stop"],
-         "leg_index": 1, "done": False},
-    ]
+    # 派車前,車上沒有任何路線,停在原地。派車時由 dispatch_orders 填入。
+    vehicle["route_legs"] = []       # 這台車依序要開的每一段路
+    vehicle["stop_events"] = []      # 這台車依序要執行的上下車事件
+    vehicle["route_start_s"] = None  # 開始跑這條路線時的模擬時間(派車那一刻)
 
     state = {
         "sim_time_s": 0.0,            # 模擬時鐘:模擬世界過了幾秒
@@ -67,8 +43,6 @@ def create_initial_state(now_s, speed=1.0):
         "vehicle": vehicle,
         "order": order,
         "stops": scenario["stops"],
-        "route_legs": load_route_legs(),  # 這台車依序要開的每一段路
-        "stop_events": stop_events,       # 這台車依序要執行的上下車事件
     }
     update_vehicle_location(state)
     return state
@@ -88,9 +62,13 @@ def advance_clock(state, now_s):
 
 def update_vehicle_location(state):
     """依照模擬時鐘,重新計算車輛位置。"""
-    state["vehicle"]["current_location"] = position_on_route(
-        state["route_legs"], state["sim_time_s"]
-    )
+    vehicle = state["vehicle"]
+    if not vehicle["route_legs"]:
+        return  # 還沒派車,沒有路線:停在原地,位置不變
+
+    # 車子沿這條路線已經開了幾秒 = 現在的模擬時間 - 派車時的模擬時間
+    driven_s = state["sim_time_s"] - vehicle["route_start_s"]
+    vehicle["current_location"] = position_on_route(vehicle["route_legs"], driven_s)
 
 
 def _bring_state_up_to_now(now_s):
@@ -98,9 +76,10 @@ def _bring_state_up_to_now(now_s):
     global _state
     if _state is None:
         _state = create_initial_state(now_s)
-    advance_clock(_state, now_s)
-    update_vehicle_location(_state)
-    process_arrivals(_state)
+    advance_clock(_state, now_s)       # 1. 時間往前推
+    dispatch_orders(_state)            # 2. 有沒有該派車的訂單(先派車,下一步才會用新路線算位置)
+    update_vehicle_location(_state)    # 3. 車子在哪
+    process_arrivals(_state)           # 4. 有沒有到站,到了就上下車
 
 
 def get_current_state():

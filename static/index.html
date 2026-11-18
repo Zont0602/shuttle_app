@@ -40,6 +40,8 @@
 
     let map = null;
     let vehicleMarker = null;
+    let routeLayer = null;        // 放路線的圖層,方便整組清掉重畫
+    let drawnRouteStart = null;   // 目前畫的是哪一次派車的路線(用派車時間辨識)
     let isPaused = false;  // 後端回傳的暫停狀態,決定暫停按鈕要送暫停還是繼續
 
     async function fetchState(method, url, body) {
@@ -70,23 +72,38 @@
       L.marker(toLatLng(pickup.location)).addTo(map).bindPopup("上車點:" + pickup.name);
       L.marker(toLatLng(dropoff.location)).addTo(map).bindPopup("下車點:" + dropoff.name);
 
-      // 依行駛順序畫每一段路線:第一段(去接人)用虛線,之後用實線
-      let allPoints = [];
-      state.route_legs.forEach((leg, index) => {
-        const points = leg.path.map(toLatLng);
-        L.polyline(points, index === 0 ? { dashArray: "6 8" } : {}).addTo(map);
-        allPoints = allPoints.concat(points);
-      });
-      map.fitBounds(L.latLngBounds(allPoints));
+      // 一開始還沒派車、沒有路線,所以用「車輛 + 上下車點」決定地圖範圍
+      map.fitBounds(L.latLngBounds([
+        toLatLng(state.vehicle.current_location),
+        toLatLng(pickup.location),
+        toLatLng(dropoff.location),
+      ]), { padding: [40, 40] });
+
+      routeLayer = L.layerGroup().addTo(map);
 
       vehicleMarker = L.circleMarker(toLatLng(state.vehicle.current_location), {
         radius: 9, color: "#c0392b", fillOpacity: 0.9,
       }).addTo(map).bindPopup("車輛 " + state.vehicle.id);
     }
 
-    // 每次拿到狀態時:只移動車輛、更新文字
+    // 車輛的路線改變時(派車、重設)才重畫路線,不用每秒重畫
+    function drawRouteIfChanged(vehicle) {
+      if (vehicle.route_start_s === drawnRouteStart) {
+        return;
+      }
+      routeLayer.clearLayers();
+      // 依行駛順序畫每一段路線:第一段(去接人)用虛線,之後用實線
+      vehicle.route_legs.forEach((leg, index) => {
+        const points = leg.path.map(toLatLng);
+        L.polyline(points, index === 0 ? { dashArray: "6 8" } : {}).addTo(routeLayer);
+      });
+      drawnRouteStart = vehicle.route_start_s;
+    }
+
+    // 每次拿到狀態時:移動車輛、更新路線與文字
     function drawDynamic(state) {
       vehicleMarker.setLatLng(toLatLng(state.vehicle.current_location));
+      drawRouteIfChanged(state.vehicle);
       statusEl.textContent =
         "模擬時間 " + state.sim_time_s.toFixed(0) + " 秒|訂單 " + state.order.status +
         (state.paused ? "(已暫停)" : "");

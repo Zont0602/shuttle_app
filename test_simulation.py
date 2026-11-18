@@ -7,6 +7,8 @@
 import json
 
 import sim_state
+from dispatch import dispatch_orders
+from route_source import build_route_plan
 from simulation import position_on_leg, position_on_route, process_arrivals
 
 with open("routes.json", "r", encoding="utf-8") as file:
@@ -18,6 +20,20 @@ def assert_close(point, expected_lat, expected_lng):
     # 小數有誤差,不能用 ==,改成檢查差距夠小(約 0.2 公尺)
     assert abs(point["lat"] - expected_lat) < 2e-6, point
     assert abs(point["lng"] - expected_lng) < 2e-6, point
+
+
+def manually_dispatched_state(route_start_s=0.0):
+    # 建立一份「已經派車」的狀態:測試到站、移動時用,不依賴 dispatch_orders。
+    # route_start_s 是派車那一刻的模擬時間。
+    state = sim_state.create_initial_state(now_s=0.0)
+    plan = build_route_plan(state["order"])
+    state["vehicle"]["route_legs"] = plan["route_legs"]
+    state["vehicle"]["stop_events"] = plan["stop_events"]
+    state["vehicle"]["route_start_s"] = route_start_s
+    state["order"]["status"] = "assigned"
+    state["order"]["assigned_vehicle"] = state["vehicle"]["id"]
+    state["sim_time_s"] = route_start_s
+    return state
 
 
 # ---------- position_on_leg ----------
@@ -68,10 +84,14 @@ assert position_on_route(ROUTE, 999) == LEG_1["path"][-1]
 
 # ---------- sim_state:模擬時鐘 ----------
 
-# 建立狀態時,時鐘從 0 開始,車在路線起點
+# 建立狀態時,時鐘從 0 開始;還沒派車,訂單是 requested,車上沒有路線
 state = sim_state.create_initial_state(now_s=1000.0)
 assert state["sim_time_s"] == 0.0
-assert state["vehicle"]["current_location"] == LEG["path"][0]
+assert state["order"]["status"] == "requested"
+assert state["order"]["assigned_vehicle"] is None
+assert state["vehicle"]["route_legs"] == []
+assert state["vehicle"]["stop_events"] == []
+assert state["vehicle"]["route_start_s"] is None
 
 # 現實過了 10 秒,模擬時鐘也前進 10 秒
 sim_state.advance_clock(state, now_s=1010.0)
@@ -81,21 +101,35 @@ assert state["sim_time_s"] == 10.0
 sim_state.advance_clock(state, now_s=1015.0)
 assert state["sim_time_s"] == 15.0
 
-# 更新位置後,車子已經離開起點
+# 沒有路線時,車子停在原地,位置不變
+start_location = state["vehicle"]["current_location"]
 sim_state.update_vehicle_location(state)
-assert state["vehicle"]["current_location"] != LEG["path"][0]
+assert state["vehicle"]["current_location"] == start_location
 
 # 路線依行駛順序排好:第一段的終點 = 第二段的起點
-legs = state["route_legs"]
+legs = build_route_plan(state["order"])["route_legs"]
 assert legs[0]["path"][-1] == legs[1]["path"][0]
 
 # 每次建立的狀態互不影響(改了一份,另一份不會跟著變)
 other = sim_state.create_initial_state(now_s=0.0)
 state["order"]["status"] = "onboard"
-assert other["order"]["status"] == "assigned"
+assert other["order"]["status"] == "requested"
 
-# 乘客數要等到上車才增加,派車時不變
+# 乘客數要等到上車才增加
 assert other["vehicle"]["passengers"] == 0
+
+
+# ---------- 派車後的移動:位置要扣掉派車時間 ----------
+
+# 第 10 秒派車:派車當下車子在路線起點
+state = manually_dispatched_state(route_start_s=10.0)
+sim_state.update_vehicle_location(state)
+assert state["vehicle"]["current_location"] == LEG["path"][0]
+
+# 模擬第 110 秒 = 派車後開了 100 秒
+state["sim_time_s"] = 110.0
+sim_state.update_vehicle_location(state)
+assert state["vehicle"]["current_location"] == position_on_leg(LEG, 100)
 
 
 # ---------- sim_state:速度倍率 ----------
@@ -149,7 +183,8 @@ sim_state.advance_clock(state, now_s=1011.0)
 assert state["sim_time_s"] == 51.0
 
 # 暫停中,車子位置和訂單狀態都不變(停在上車點前,不會偷偷上車)
-state = sim_state.create_initial_state(now_s=0.0)
+state = manually_dispatched_state(route_start_s=0.0)
+state["last_real_time_s"] = 0.0
 sim_state.advance_clock(state, now_s=140.0)
 sim_state.update_vehicle_location(state)
 location_before = state["vehicle"]["current_location"]
@@ -166,9 +201,10 @@ assert state["vehicle"]["passengers"] == 0
 
 
 def state_at(sim_time_s, state=None):
-    # 把模擬時間設成 sim_time_s 後處理到站事件;沒給 state 就建立新的
+    # 把模擬時間設成 sim_time_s 後處理到站事件;沒給 state 就建立「第 0 秒派車」的狀態
+    # (派車時間不是 0 的情況,等 process_arrivals 扣掉派車時間後再補測試)
     if state is None:
-        state = sim_state.create_initial_state(now_s=0.0)
+        state = manually_dispatched_state(route_start_s=0.0)
     state["sim_time_s"] = sim_time_s
     process_arrivals(state)
     return state
@@ -193,7 +229,7 @@ assert state["vehicle"]["passengers"] == 1
 state = state_at(200, state)
 assert state["order"]["status"] == "onboard"
 assert state["vehicle"]["passengers"] == 1
-assert [event["done"] for event in state["stop_events"]] == [True, False]
+assert [event["done"] for event in state["vehicle"]["stop_events"]] == [True, False]
 
 # 302.2 秒:開完第 1 段,到下車點 → 乘客下車,訂單完成
 state = state_at(302.2, state)
@@ -209,10 +245,80 @@ state = state_at(100)
 state = state_at(400, state)
 assert state["order"]["status"] == "completed"
 assert state["vehicle"]["passengers"] == 0
-assert [event["done"] for event in state["stop_events"]] == [True, True]
+assert [event["done"] for event in state["vehicle"]["stop_events"]] == [True, True]
 
 # 派車的車輛不會因為上下車而改變
 assert state["order"]["assigned_vehicle"] == state["vehicle"]["id"]
+
+
+# ---------- dispatch_orders:派車 ----------
+
+# 還沒到叫車時間(第 10 秒):不派車,訂單維持 requested,車上沒有路線
+state = sim_state.create_initial_state(now_s=0.0)
+state["sim_time_s"] = 9.9
+dispatch_orders(state)
+assert state["order"]["status"] == "requested"
+assert state["vehicle"]["route_legs"] == []
+
+# 到了叫車時間:派車,路線和事件交給車輛,記下派車時間
+state["sim_time_s"] = 10.0
+dispatch_orders(state)
+assert state["order"]["status"] == "assigned"
+assert state["order"]["assigned_vehicle"] == state["vehicle"]["id"]
+assert len(state["vehicle"]["route_legs"]) == 2
+assert len(state["vehicle"]["stop_events"]) == 2
+assert state["vehicle"]["route_start_s"] == 10.0
+
+# 派車不會改乘客數(要等到站才上車)
+assert state["vehicle"]["passengers"] == 0
+
+# 冪等:之後重複呼叫(像重複輪詢),不會重新派車,派車時間不會被改掉
+state["sim_time_s"] = 20.0
+dispatch_orders(state)
+dispatch_orders(state)
+assert state["vehicle"]["route_start_s"] == 10.0
+
+# 第 10 秒派車:到站時間要扣掉派車時間
+# 上車點在 10 + 151 = 161 秒,下車點在 10 + 302.2 = 312.2 秒
+for sim_time_s, expected_status, expected_passengers in [
+    (160, "assigned", 0),     # 車子還在去接人的路上,不能提早上車
+    (161, "onboard", 1),      # 到上車點
+    (312.1, "onboard", 1),    # 還差一點才到下車點
+    (312.2, "completed", 0),  # 到下車點
+]:
+    state["sim_time_s"] = sim_time_s
+    process_arrivals(state)
+    assert state["order"]["status"] == expected_status, sim_time_s
+    assert state["vehicle"]["passengers"] == expected_passengers, sim_time_s
+
+# 還沒派車時處理到站事件,不會出錯,也不會改變任何狀態
+state = sim_state.create_initial_state(now_s=0.0)
+process_arrivals(state)
+assert state["order"]["status"] == "requested"
+assert state["vehicle"]["passengers"] == 0
+
+# 可重現:模擬時間一次跳過叫車時間(例如 20 倍速 + 每秒輪詢),
+# 派車時間仍是叫車時間 10 秒,不是「剛好輪詢到的時間」;位置與到站結果也一樣
+for first_poll_s in (36.7, 150, 170):
+    state = sim_state.create_initial_state(now_s=0.0)
+    state["sim_time_s"] = first_poll_s
+    dispatch_orders(state)
+    sim_state.update_vehicle_location(state)
+    process_arrivals(state)
+    assert state["vehicle"]["route_start_s"] == 10, first_poll_s
+    expected = position_on_route(state["vehicle"]["route_legs"], first_poll_s - 10)
+    assert state["vehicle"]["current_location"] == expected, first_poll_s
+# 170 秒時已經過了上車時間(161 秒),第一次輪詢就要完成派車並讓乘客上車
+assert state["order"]["status"] == "onboard"
+assert state["vehicle"]["passengers"] == 1
+
+# 坐不下時不派車:車上已滿,訂單維持 requested
+state = sim_state.create_initial_state(now_s=0.0)
+state["vehicle"]["passengers"] = state["vehicle"]["capacity"]
+state["sim_time_s"] = 10.0
+dispatch_orders(state)
+assert state["order"]["status"] == "requested"
+assert state["vehicle"]["route_legs"] == []
 
 
 # 超出允許範圍的倍率會被拒絕
